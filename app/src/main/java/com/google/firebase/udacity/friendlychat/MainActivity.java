@@ -16,6 +16,7 @@
 package com.google.firebase.udacity.friendlychat;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
@@ -35,6 +36,11 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import com.firebase.ui.auth.AuthUI;
+import com.google.android.gms.tasks.Continuation;
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.ChildEventListener;
@@ -42,18 +48,24 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.storage.FirebaseStorage;
+import com.google.firebase.storage.StorageReference;
+import com.google.firebase.storage.UploadTask;
 
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener{
 
     private static final String TAG = "MainActivity";
 
     public static final String ANONYMOUS = "anonymous";
     public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
     public static final int RC_SIGN_IN = 1;
+    public static final int RC_PHOTO_PICKER = 2;
 
     private ListView mMessageListView;
     private MessageAdapter mMessageAdapter;
@@ -66,8 +78,15 @@ public class MainActivity extends AppCompatActivity {
 
     private FirebaseAuth firebaseAuth;
     private FirebaseAuth.AuthStateListener authStateListener;
+
     private FirebaseDatabase firebaseDatabase;
     private DatabaseReference messagesDatabaseReference;
+
+    private FirebaseStorage firebaseStorage;
+    private StorageReference chatPhotosStorageReference;
+
+    private UploadTask uploadTask;
+
     private ChildEventListener childEventListener;
 
     private List<FriendlyMessage> friendlyMessages;
@@ -84,12 +103,15 @@ public class MainActivity extends AppCompatActivity {
         firebaseDatabase = FirebaseDatabase.getInstance();
         messagesDatabaseReference = firebaseDatabase.getReference().child("messages");
 
+        firebaseStorage = FirebaseStorage.getInstance();
+        chatPhotosStorageReference = firebaseStorage.getReference().child("chat_photos");
+
         // Initialize references to views
-        mProgressBar = (ProgressBar) findViewById(R.id.progressBar);
-        mMessageListView = (ListView) findViewById(R.id.messageListView);
-        mPhotoPickerButton = (ImageButton) findViewById(R.id.photoPickerButton);
-        mMessageEditText = (EditText) findViewById(R.id.messageEditText);
-        mSendButton = (Button) findViewById(R.id.sendButton);
+        mProgressBar = findViewById(R.id.progressBar);
+        mMessageListView = findViewById(R.id.messageListView);
+        mPhotoPickerButton = findViewById(R.id.photoPickerButton);
+        mMessageEditText = findViewById(R.id.messageEditText);
+        mSendButton = findViewById(R.id.sendButton);
 
         // Initialize message ListView and its adapter
         friendlyMessages = new ArrayList<>();
@@ -100,12 +122,7 @@ public class MainActivity extends AppCompatActivity {
         mProgressBar.setVisibility(ProgressBar.INVISIBLE);
 
         // ImagePickerButton shows an image picker to upload a image for a message
-        mPhotoPickerButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                // TODO: Fire an intent to show an image picker
-            }
-        });
+        mPhotoPickerButton.setOnClickListener(this);
 
         // Enable Send button when there's text to send
         mMessageEditText.addTextChangedListener(new TextWatcher() {
@@ -129,20 +146,7 @@ public class MainActivity extends AppCompatActivity {
         mMessageEditText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(DEFAULT_MSG_LENGTH_LIMIT)});
 
         // Send button sends a message and clears the EditText
-        mSendButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                // TODO: Send messages on click
-
-                FriendlyMessage friendlyMessage = new FriendlyMessage(
-                        mMessageEditText.getText().toString(), mUsername, null);
-                messagesDatabaseReference.push().setValue(friendlyMessage);
-
-                // Clear input box
-                mMessageEditText.setText("");
-            }
-        });
-
+        mSendButton.setOnClickListener(this);
 
         authStateListener = new FirebaseAuth.AuthStateListener() {
             @Override
@@ -200,6 +204,40 @@ public class MainActivity extends AppCompatActivity {
                         Toast.LENGTH_SHORT).show();
                 finish();
             }
+        }
+        else if (requestCode == RC_PHOTO_PICKER && resultCode == RESULT_OK ){
+            Uri selectedImageUri = data.getData();
+            assert selectedImageUri != null;
+            final StorageReference photoRef = chatPhotosStorageReference.child(
+                    Objects.requireNonNull(selectedImageUri.getLastPathSegment()));
+            uploadTask = photoRef.putFile(selectedImageUri);
+
+            Task<Uri> urlTask = uploadTask.continueWithTask(
+                    new Continuation<UploadTask.TaskSnapshot, Task<Uri>>() {
+                @Override
+                public Task<Uri> then(@NonNull Task<UploadTask.TaskSnapshot> task)
+                        throws Exception {
+                    if (!task.isSuccessful()) {
+                        throw Objects.requireNonNull(task.getException());
+                    }
+                    // Continue with the task to get the download URL
+                    return photoRef.getDownloadUrl();
+                }
+            }).addOnCompleteListener(new OnCompleteListener<Uri>() {
+                @Override
+                public void onComplete(@NonNull Task<Uri> task) {
+                    if (task.isSuccessful()) {
+                        Uri downloadUri = task.getResult();
+                        assert downloadUri != null;
+                        FriendlyMessage friendlyMessage = new FriendlyMessage(
+                                null, mUsername, downloadUri.toString());
+                        messagesDatabaseReference.push().setValue(friendlyMessage);
+                    } else {
+                        Toast.makeText(MainActivity.this, "Photo not uploaded!",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
         }
     }
 
@@ -269,4 +307,26 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    @Override
+    public void onClick(View v) {
+        switch (v.getId()){
+            case R.id.sendButton:
+                // TODO: Send messages on click
+
+                FriendlyMessage friendlyMessage = new FriendlyMessage(
+                        mMessageEditText.getText().toString(), mUsername, null);
+                messagesDatabaseReference.push().setValue(friendlyMessage);
+
+                // Clear input box
+                mMessageEditText.setText("");
+                break;
+
+            case R.id.photoPickerButton:
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.setType("image/jpeg");
+                intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+                startActivityForResult(Intent.createChooser(intent,
+                        "Complete action using"), RC_PHOTO_PICKER);
+        }
+    }
 }
