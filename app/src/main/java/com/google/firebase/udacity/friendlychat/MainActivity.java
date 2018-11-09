@@ -24,6 +24,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.text.Editable;
 import android.text.InputFilter;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
@@ -48,6 +49,8 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 import com.google.firebase.storage.UploadTask;
@@ -55,7 +58,9 @@ import com.google.firebase.storage.UploadTask;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public class MainActivity extends AppCompatActivity implements View.OnClickListener{
@@ -64,6 +69,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     public static final String ANONYMOUS = "anonymous";
     public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
+    public static final String FRIENDLY_MSG_KEY = "friendly_msg_length";
     public static final int RC_SIGN_IN = 1;
     public static final int RC_PHOTO_PICKER = 2;
 
@@ -85,8 +91,9 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private FirebaseStorage firebaseStorage;
     private StorageReference chatPhotosStorageReference;
 
-    private UploadTask uploadTask;
+    private FirebaseRemoteConfig firebaseRemoteConfig;
 
+    private UploadTask uploadTask;
     private ChildEventListener childEventListener;
 
     private List<FriendlyMessage> friendlyMessages;
@@ -105,6 +112,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
         firebaseStorage = FirebaseStorage.getInstance();
         chatPhotosStorageReference = firebaseStorage.getReference().child("chat_photos");
+
+        firebaseRemoteConfig = FirebaseRemoteConfig.getInstance();
 
         // Initialize references to views
         mProgressBar = findViewById(R.id.progressBar);
@@ -171,6 +180,48 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 }
             }
         };
+
+        FirebaseRemoteConfigSettings remoteConfigSettings = new FirebaseRemoteConfigSettings.Builder()
+                .setDeveloperModeEnabled(BuildConfig.DEBUG)
+                .build();
+        firebaseRemoteConfig.setConfigSettings(remoteConfigSettings);
+
+        Map<String, Object> defaultConfig = new HashMap<>();
+        defaultConfig.put(FRIENDLY_MSG_KEY, DEFAULT_MSG_LENGTH_LIMIT);
+        firebaseRemoteConfig.setDefaults(defaultConfig);
+
+        fetchConfig();
+
+    }
+
+    private void fetchConfig() {
+        long cacheExpirationLimit = 3600;
+        if (firebaseRemoteConfig.getInfo().getConfigSettings().isDeveloperModeEnabled())
+            cacheExpirationLimit = 0;
+
+        firebaseRemoteConfig.fetch(cacheExpirationLimit)
+                .addOnSuccessListener(new OnSuccessListener<Void>() {
+                    @Override
+                    public void onSuccess(Void aVoid) {
+                        firebaseRemoteConfig.activateFetched();
+                        applyRetrievedLengthLimit();
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        Log.e("Error fetching config", TAG);
+                        applyRetrievedLengthLimit();
+                    }
+                });
+    }
+
+    private void applyRetrievedLengthLimit() {
+        Long friendly_msg_length = firebaseRemoteConfig.getLong(FRIENDLY_MSG_KEY);
+        mMessageEditText.setFilters(new InputFilter[]{
+                new InputFilter.LengthFilter(friendly_msg_length.intValue())});
+        Log.d(TAG, FRIENDLY_MSG_KEY + " = " + friendly_msg_length);
+
     }
 
     @Override
